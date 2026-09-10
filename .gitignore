@@ -1,5 +1,9 @@
 .DS_Store
 
+# Local writing drafts and agent state
+/_workspace/
+/.omc/
+
 # Local secrets
 .env
 .env.*
