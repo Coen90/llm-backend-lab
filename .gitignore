@@ -9,6 +9,7 @@
 **/bin/
 **/coverage.out
 *.test
+/services/agent/agent
 
 # Created by https://www.toptal.com/developers/gitignore/api/goland+iml,goland+all,goland
 # Edit at https://www.toptal.com/developers/gitignore?templates=goland+iml,goland+all,goland
