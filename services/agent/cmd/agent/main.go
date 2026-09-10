@@ -24,7 +24,9 @@ func main() {
 	router := gin.Default()
 	_ = router.SetTrustedProxies(nil)
 	router.HandleMethodNotAllowed = true
-	router.POST("/chat", chat.NewHandler(llm.NewClient(apiKey)))
+	client := llm.NewClient(apiKey)
+	router.POST("/chat", chat.NewHandler(client))
+	router.POST("/chat/stream", chat.NewStreamHandler(client))
 	if err := router.Run(addr); err != nil {
 		log.Fatal(err)
 	}

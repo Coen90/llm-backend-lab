@@ -2,6 +2,7 @@ package llm
 
 // responseRequest is the JSON body sent to OpenAI's Responses API.
 type responseRequest struct {
+	Stream          bool            `json:"stream,omitempty"`
 	Model           string          `json:"model"`
 	Input           string          `json:"input"`
 	Store           bool            `json:"store"`
@@ -42,4 +43,11 @@ type Usage struct {
 type Result struct {
 	Answer string `json:"answer"`
 	Usage  Usage  `json:"usage"`
+}
+
+// responseEvent is one JSON payload in the upstream SSE stream.
+type responseEvent struct {
+	Type     string        `json:"type"`
+	Delta    string        `json:"delta"`
+	Response *responseBody `json:"response"`
 }

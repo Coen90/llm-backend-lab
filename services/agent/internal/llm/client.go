@@ -47,33 +47,12 @@ func NewClient(apiKey string) *Client {
 }
 
 func (c *Client) Reply(ctx context.Context, message string) (Result, error) {
-	payload := responseRequest{
-		Model:           Model,
-		Input:           message,
-		Store:           false,
-		MaxOutputTokens: maxOutputTokens,
-		Reasoning:       reasoningConfig{Effort: "minimal"},
-	}
-	body, err := json.Marshal(payload)
+	resp, err := c.request(ctx, message, false)
 	if err != nil {
-		return Result{}, fmt.Errorf("encode request: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(body))
-	if err != nil {
-		return Result{}, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return Result{}, fmt.Errorf("call OpenAI: %w", err)
+		return Result{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Result{}, &ProviderError{StatusCode: resp.StatusCode}
-	}
-	body, err = io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return Result{}, fmt.Errorf("read response: %w", err)
 	}
@@ -84,7 +63,6 @@ func (c *Client) Reply(ctx context.Context, message string) (Result, error) {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return Result{}, ErrInvalidResponse
 	}
-	fmt.Println(response)
 	result := Result{Usage: response.Usage}
 	if response.Status == "incomplete" {
 		return result, ErrIncomplete
@@ -112,4 +90,36 @@ func (c *Client) Reply(ctx context.Context, message string) (Result, error) {
 		return result, ErrInvalidResponse
 	}
 	return result, nil
+}
+
+// request shares authentication and model settings between both response modes.
+func (c *Client) request(ctx context.Context, message string, stream bool) (*http.Response, error) {
+	payload := responseRequest{
+		Model:           Model,
+		Input:           message,
+		Store:           false,
+		MaxOutputTokens: maxOutputTokens,
+		Reasoning:       reasoningConfig{Effort: "minimal"},
+		Stream:          stream,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call OpenAI: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, &ProviderError{StatusCode: resp.StatusCode}
+	}
+	return resp, nil
 }
