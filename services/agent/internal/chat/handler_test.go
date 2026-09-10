@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"example.com/first-agent/services/agent/internal/llm"
+	"github.com/Coen90/llm-backend-lab/services/agent/internal/llm"
 )
 
 func init() { gin.SetMode(gin.TestMode) }

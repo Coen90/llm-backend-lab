@@ -1,4 +1,4 @@
-module example.com/first-agent/services/agent
+module github.com/Coen90/llm-backend-lab/services/agent
 
 go 1.26.3
 
