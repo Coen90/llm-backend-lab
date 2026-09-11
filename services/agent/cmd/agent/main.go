@@ -26,7 +26,9 @@ func main() {
 	router.HandleMethodNotAllowed = true
 	client := llm.NewClient(apiKey)
 	router.POST("/chat", chat.NewHandler(client))
-	router.POST("/chat/stream", chat.NewStreamHandler(client))
+	streams := chat.NewStreamRegistry()
+	router.POST("/chat/stream", chat.NewStreamHandler(client, streams))
+	router.POST("/chat/streams/:id/stop", chat.NewStopHandler(streams))
 	if err := router.Run(addr); err != nil {
 		log.Fatal(err)
 	}

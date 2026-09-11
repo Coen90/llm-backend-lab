@@ -23,7 +23,9 @@ func (f streamFunc) Stream(ctx context.Context, s string, emit func(string) erro
 }
 func streamRouter(client streamer) http.Handler {
 	router := gin.New()
-	router.POST("/chat/stream", NewStreamHandler(client))
+	streams := NewStreamRegistry()
+	router.POST("/chat/stream", NewStreamHandler(client, streams))
+	router.POST("/chat/streams/:id/stop", NewStopHandler(streams))
 	return router
 }
 func streamRequest(body string) *http.Request {
@@ -46,27 +48,26 @@ func TestStreamInvalidInputDoesNotCallModel(t *testing.T) {
 	}
 }
 
-func TestStreamErrorBeforeAndAfterFirstDelta(t *testing.T) {
+func TestStreamErrorsAfterStarted(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		err    error
-		status int
-		code   string
+		name string
+		err  error
+		code string
 	}{
-		{"timeout", context.DeadlineExceeded, 504, "timeout"},
-		{"incomplete", llm.ErrIncomplete, 502, "incomplete_response"},
-		{"provider", &llm.ProviderError{StatusCode: 429}, 502, "model_error"},
-		{"unexpected EOF", llm.ErrInvalidResponse, 502, "model_error"},
-		{"private error", errors.New("private-account-info"), 502, "model_error"},
+		{"timeout", context.DeadlineExceeded, "timeout"},
+		{"incomplete", llm.ErrIncomplete, "incomplete_response"},
+		{"provider", &llm.ProviderError{StatusCode: 429}, "model_error"},
+		{"unexpected EOF", llm.ErrInvalidResponse, "model_error"},
+		{"private error", errors.New("private-account-info"), "model_error"},
 	} {
-		for _, started := range []bool{false, true} {
-			name := tc.name + " before"
-			if started {
-				name = tc.name + " after"
+		for _, withDelta := range []bool{false, true} {
+			name := tc.name + " before delta"
+			if withDelta {
+				name = tc.name + " after delta"
 			}
 			t.Run(name, func(t *testing.T) {
 				router := streamRouter(streamFunc(func(_ context.Context, _ string, emit func(string) error) (llm.Usage, error) {
-					if started {
+					if withDelta {
 						if err := emit("partial"); err != nil {
 							return llm.Usage{}, err
 						}
@@ -76,24 +77,14 @@ func TestStreamErrorBeforeAndAfterFirstDelta(t *testing.T) {
 				w := httptest.NewRecorder()
 				router.ServeHTTP(w, streamRequest(`{"message":"hello"}`))
 				body := normalizeSSE(w.Body.String())
-				if started {
-					if w.Code != 200 || strings.Count(body, "event: error\n") != 1 || strings.Contains(body, "event: done") || !strings.HasPrefix(body, "event: delta\n") {
-						t.Fatalf("status=%d body=%s", w.Code, body)
-					}
-					if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream") {
-						t.Fatal("missing SSE content type")
-					}
-				} else {
-					if w.Code != tc.status || strings.Contains(body, "event:") {
-						t.Fatalf("status=%d body=%s", w.Code, body)
-					}
-					var payload map[string]string
-					if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil || payload["code"] != tc.code {
-						t.Fatalf("payload=%v err=%v", payload, err)
-					}
+				if w.Code != 200 || !strings.HasPrefix(body, "event: started\n") || strings.Count(body, "event: error\n") != 1 || strings.Contains(body, "event: done") || strings.Contains(body, "event: user_cancelled") {
+					t.Fatalf("status=%d body=%s", w.Code, body)
 				}
-				if !strings.Contains(body, tc.code) || strings.Contains(body, "private-account-info") {
+				if strings.Contains(body, "event: delta\n") != withDelta || !strings.Contains(body, tc.code) || strings.Contains(body, "private-account-info") {
 					t.Fatalf("body=%s", body)
+				}
+				if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream") {
+					t.Fatal("missing SSE content type")
 				}
 			})
 		}
@@ -147,6 +138,7 @@ func TestStreamFlushesOverHTTPBeforeCompletion(t *testing.T) {
 		t.Fatalf("response=%+v", resp)
 	}
 	reader := bufio.NewReader(resp.Body)
+	_ = readStarted(t, reader)
 	first, err := readFrame(reader)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +176,9 @@ func TestStreamDisconnectCancelsModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = readFrame(bufio.NewReader(resp.Body))
+	reader := bufio.NewReader(resp.Body)
+	_ = readStarted(t, reader)
+	_, err = readFrame(reader)
 	if err != nil {
 		resp.Body.Close()
 		t.Fatal(err)
@@ -204,20 +198,35 @@ func (w failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken
 func (w failingWriter) WriteString(string) (int, error) { return 0, errors.New("broken pipe") }
 
 func TestStreamWriteFailureStopsModel(t *testing.T) {
-	returned := false
-	router := streamRouter(streamFunc(func(ctx context.Context, _ string, emit func(string) error) (llm.Usage, error) {
-		err := emit("hi")
-		if err == nil {
-			t.Fatal("write failure was not returned to model reader")
-		}
-		returned = true
-		return llm.Usage{}, err
-	}))
+	streams := NewStreamRegistry()
+	router := gin.New()
+	called := false
+	router.POST("/chat/stream", NewStreamHandler(streamFunc(func(context.Context, string, func(string) error) (llm.Usage, error) {
+		called = true
+		return llm.Usage{}, nil
+	}), streams))
 	w := failingWriter{httptest.NewRecorder()}
 	router.ServeHTTP(w, streamRequest(`{"message":"hello"}`))
-	if !returned || w.Body.Len() != 0 {
-		t.Fatalf("returned=%v body=%s", returned, w.Body)
+	if called || w.Body.Len() != 0 || len(streams.active) != 0 {
+		t.Fatalf("called=%v body=%s active=%d", called, w.Body, len(streams.active))
 	}
+}
+
+func readStarted(t *testing.T, reader *bufio.Reader) string {
+	t.Helper()
+	frame, err := readFrame(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(frame, "event: started\n") {
+		t.Fatalf("first frame=%q", frame)
+	}
+	var event startedEvent
+	data := strings.TrimSuffix(strings.TrimPrefix(frame, "event: started\ndata: "), "\n\n")
+	if err := json.Unmarshal([]byte(data), &event); err != nil || event.StreamID == "" {
+		t.Fatalf("started=%q err=%v", data, err)
+	}
+	return event.StreamID
 }
 
 // SSE allows an optional space after the field colon.
