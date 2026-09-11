@@ -20,22 +20,13 @@ type replier interface {
 
 func NewHandler(client replier) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var request struct {
-			Message string `json:"message" binding:"required"`
-		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
-		if err := c.ShouldBindJSON(&request); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "a JSON body with message is required (max 16 KiB)"})
-			return
-		}
-		request.Message = strings.TrimSpace(request.Message)
-		if request.Message == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "message must not be empty"})
+		message, ok := readMessage(c)
+		if !ok {
 			return
 		}
 
 		// The LLM client owns the 30-second timeout; pass request cancellation through.
-		result, err := client.Reply(c.Request.Context(), request.Message)
+		result, err := client.Reply(c.Request.Context(), message)
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return
@@ -48,6 +39,23 @@ func NewHandler(client replier) gin.HandlerFunc {
 			}
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"answer": result.Answer})
+		c.JSON(http.StatusOK, gin.H{"answer": result.Answer, "usage": result.Usage})
 	}
+}
+
+func readMessage(c *gin.Context) (string, bool) {
+	var request struct {
+		Message string `json:"message" binding:"required"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "a JSON body with message is required (max 16 KiB)"})
+		return "", false
+	}
+	request.Message = strings.TrimSpace(request.Message)
+	if request.Message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "message must not be empty"})
+		return "", false
+	}
+	return request.Message, true
 }
