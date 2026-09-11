@@ -3,6 +3,11 @@
 Java·Go 기반 AI 백엔드를 단계적으로 만드는 학습용 모노레포입니다.
 LLM 요청·응답을 직접 이해하고, 이후 Agent Runtime으로 발전시키는 것이 목표입니다.
 
+개발 과정과 선택의 이유는 다음 글에 정리했습니다.
+
+- [Stage 01 — 질문에 답하는 API 만들기](docs/blog/stage-01-llm-serving.md)
+- [Stage 02 — 답변 스트리밍과 생성 중단](docs/blog/stage-02-llm-streaming.md)
+
 ## Stage 01 — LLM Serving
 
 `POST /chat`으로 질문을 받아 OpenAI `gpt-5-nano`를 호출하고, 완성된 답변을 반환합니다.
